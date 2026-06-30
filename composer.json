@@ -14,7 +14,7 @@
     ],
     "support": {
         "email": "dev@redeyed.com",
-        "issues": "https://github.com/redeyed/redeyed-php/issues"
+        "issues": "https://github.com/bruted/redeyed-php/issues"
     },
     "require": {
         "php": ">=8.1",
