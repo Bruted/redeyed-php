@@ -5,19 +5,28 @@ namespace Redeyed;
 /**
  * Official Redeyed API client (PHP).
  *
- * Free to use — but every call is authenticated with your Redeyed API key, so
- * the client refuses to run without one. Dependency-free (uses cURL), so it
- * works in any PHP project or CMS. Get a key at https://redeyed.com/developers.
+ * Free to use — the developer API endpoints (AI tools, IP reputation, account)
+ * are authenticated with your Redeyed API key, so the client refuses to run
+ * without one. Get a key at https://redeyed.com/developers.
+ *
+ * Sentinel captcha verification is different: it does NOT use the developer API
+ * key. Each site has its own Secret Key (reCAPTCHA/Turnstile-style) that
+ * authenticates the server-side verify call. Grab your Site Key + Secret Key
+ * from the Redeyed Lab under Sentinel → Sites (the Secret Key is shown once).
+ *
+ * Dependency-free (uses cURL), so it works in any PHP project or CMS.
  */
 class Client
 {
     private string $apiKey;
+    private string $secretKey;
     private string $baseUrl;
+    private string $siteBaseUrl;
     private int $timeout;
 
     /**
-     * @param  string  $apiKey  Your Redeyed API key (required).
-     * @param  array{base_url?: string, timeout?: int}  $options
+     * @param  string  $apiKey  Your Redeyed API key (required for AI/IP/account endpoints).
+     * @param  array{base_url?: string, site_base_url?: string, secret_key?: string, timeout?: int}  $options
      */
     public function __construct(string $apiKey, array $options = [])
     {
@@ -30,7 +39,10 @@ class Client
         }
 
         $this->apiKey = $apiKey;
+        $this->secretKey = (string) ($options['secret_key'] ?? getenv('SENTINEL_SECRET_KEY') ?: '');
         $this->baseUrl = rtrim($options['base_url'] ?? 'https://redeyed.com/api/v1', '/');
+        // Sentinel verify lives at the site root (/sentinel/siteverify), not under /api/v1.
+        $this->siteBaseUrl = rtrim($options['site_base_url'] ?? 'https://redeyed.com', '/');
         $this->timeout = (int) ($options['timeout'] ?? 60);
     }
 
@@ -49,11 +61,47 @@ class Client
     /**
      * Verify a Sentinel human-verification token (server-to-server).
      *
-     * @param  array<string, mixed>  $params  e.g. ['site_key' => '...', 'ip' => '...']
+     * Uses your site's Secret Key (from the Redeyed Lab → Sentinel → Sites) —
+     * NOT the developer API key. Posts to {site_base_url}/sentinel/siteverify
+     * with {"secret": "...", "response": "<token>"} and, optionally, the
+     * client's IP as "remoteip".
+     *
+     * Fail-open: if no Secret Key is configured, verification is skipped and a
+     * successful result is returned so a mis-configured deploy never locks users
+     * out. Base your own "is Sentinel configured?" check on hasSecret().
+     *
+     * @param  string       $token      The token returned by the Sentinel widget.
+     * @param  string|null  $remoteIp   Optional client IP address.
+     * @return array{success: bool, outcome: string, score: float|int}
      */
-    public function verify(string $token, array $params = []): array
+    public function verify(string $token, ?string $remoteIp = null): array
     {
-        return $this->request('POST', '/verify', array_merge(['token' => $token], $params));
+        // Fail open when no Secret Key is present (see hasSecret()).
+        if (! $this->hasSecret()) {
+            return ['success' => true, 'outcome' => 'skipped_no_secret', 'score' => 0];
+        }
+
+        $body = [
+            'secret' => $this->secretKey,
+            'response' => $token,
+        ];
+        if ($remoteIp !== null && $remoteIp !== '') {
+            $body['remoteip'] = $remoteIp;
+        }
+
+        $json = $this->request('POST', '/sentinel/siteverify', $body, false);
+
+        return [
+            'success' => ($json['success'] ?? false) === true,
+            'outcome' => (string) ($json['outcome'] ?? ''),
+            'score' => $json['score'] ?? 0,
+        ];
+    }
+
+    /** Whether a Sentinel Secret Key is configured for server-side verification. */
+    public function hasSecret(): bool
+    {
+        return trim($this->secretKey) !== '';
     }
 
     /** @param array<string, mixed> $params */
@@ -76,16 +124,22 @@ class Client
 
     /**
      * @param  array<string, mixed>|null  $body
+     * @param  bool  $withApiKey  Send the developer API key header. Sentinel
+     *                            verify authenticates with the site Secret Key
+     *                            in the body instead, so it passes false.
      * @return array<string, mixed>
      */
-    private function request(string $method, string $path, ?array $body = null): array
+    private function request(string $method, string $path, ?array $body = null, bool $withApiKey = true): array
     {
-        $ch = curl_init($this->baseUrl.$path);
+        $base = $withApiKey ? $this->baseUrl : $this->siteBaseUrl;
+        $ch = curl_init($base.$path);
         $headers = [
-            'X-Api-Key: '.$this->apiKey,
             'Accept: application/json',
-            'User-Agent: redeyed-php/1.0',
+            'User-Agent: redeyed-php/1.1',
         ];
+        if ($withApiKey) {
+            $headers[] = 'X-Api-Key: '.$this->apiKey;
+        }
 
         curl_setopt_array($ch, [
             CURLOPT_CUSTOMREQUEST => $method,
