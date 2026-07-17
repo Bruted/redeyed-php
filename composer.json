@@ -2,6 +2,7 @@
     "name": "redeyed/sdk",
     "description": "Official Redeyed API client for PHP — AI tools, Sentinel human verification & IP reputation. Free to install; requires a Redeyed API key to activate.",
     "type": "library",
+    "version": "1.1.0",
     "keywords": ["redeyed", "ai", "captcha", "sentinel", "ip-reputation", "bot-detection", "sdk"],
     "homepage": "https://redeyed.com/developers",
     "license": "MIT",
